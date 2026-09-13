@@ -1,438 +1,149 @@
-/* The Index — simple Supabase application */
-let supabaseClient = null, currentUser = null;
-const $ = s => document.querySelector(s);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const categories = ['Web & apps', 'Design & creative', 'Home & repair', 'Health & wellness', 'Business & professional', 'Education & tutoring', 'Events & entertainment', 'Other'];
+/* global supabase */
+const $ = (selector, root = document) => root.querySelector(selector);
+const esc = (value = '') => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+const state = { client: null, user: null };
 
-function toast(msg) {
-  const t = $('#toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add('show');
-  clearTimeout(window.__toast);
-  window.__toast = setTimeout(() => t.classList.remove('show'), 3000);
+function client() {
+  if (state.client) return state.client;
+  const url = window.THE_INDEX_SUPABASE_URL;
+  const key = window.THE_INDEX_SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error('Add your Supabase project URL and anon key in config.js before using the live site.');
+  state.client = supabase.createClient(url, key);
+  return state.client;
 }
-
-function busy(btn, on, label) {
-  if (!btn) return;
-  btn.disabled = on;
-  if (on) {
-    btn.dataset.old = btn.textContent;
-    btn.textContent = label || 'Please wait…';
-  } else if (btn.dataset.old) {
-    btn.textContent = btn.dataset.old;
-  }
+function message(target, text, type = '') {
+  if (!target) return;
+  target.hidden = !text;
+  target.textContent = text || '';
+  target.className = `notice ${type}`;
 }
-
-function normalizeUrl(v) {
-  if (!v) return '';
-  return /^https?:\/\//i.test(v) ? v : 'https://' + v;
-}
-
-async function initSupabase() {
-  if (!window.supabase || !window.THE_INDEX_SUPABASE_URL || !window.THE_INDEX_SUPABASE_KEY) return false;
-  supabaseClient = window.supabase.createClient(window.THE_INDEX_SUPABASE_URL, window.THE_INDEX_SUPABASE_KEY);
-  const { data } = await supabaseClient.auth.getSession();
-  currentUser = data.session?.user || null;
-  supabaseClient.auth.onAuthStateChange((_e, s) => { currentUser = s?.user || null; });
-  return true;
-}
-
-async function ensureProfile() {
-  if (!currentUser) return;
-  await supabaseClient.from('profiles').upsert({
-    id: currentUser.id,
-    name: currentUser.user_metadata?.full_name || currentUser.email?.split('@')[0] || 'Index member',
-    email: currentUser.email
-  }, { onConflict: 'id' });
-}
-
-function nextUrl() {
-  const n = new URLSearchParams(location.search).get('next');
-  return n && /^[a-zA-Z0-9._-]+\.html$/.test(n) ? n : 'dashboard.html';
-}
-
-/* ---------- Directory ---------- */
-
-async function loadApproved() {
-  const { data, error } = await supabaseClient
-    .from('providers')
-    .select('*, provider_photos(image_url,sort_order)')
-    .eq('status', 'approved')
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return data || [];
-}
-
+function loading(target, value) { if (target) target.hidden = !value; }
 function providerCard(p) {
-  const photos = (p.provider_photos || []).slice().sort((a, b) => a.sort_order - b.sort_order);
-  const cover = photos[0]?.image_url;
-  const image = cover
-    ? `<img src="${esc(cover)}" alt="${esc(p.name || '')}" loading="lazy">`
-    : `<div class="image-placeholder" aria-hidden="true"><span>✦</span></div>`;
-  return `<article class="listing-card"><a class="card-image ${cover ? '' : 'no-image'}" href="provider.html?id=${encodeURIComponent(p.id)}">${image}</a><div class="card-body"><div class="card-topline"><p>${esc(p.category || 'Other')}</p><span class="verified">✓ Verified</span></div><h3><a href="provider.html?id=${encodeURIComponent(p.id)}">${esc(p.name || 'Unnamed provider')}</a></h3><p class="card-desc">${esc(p.description || '')}</p><div class="card-footer"><span>${esc(p.location || 'Online')}</span><span>Verified provider</span></div></div></article>`;
+  const image = p.image_url || 'assets/studio.jpg';
+  const rating = Number(p.average_rating || 0).toFixed(1);
+  return `<article class="listing-card"><a class="card-image" href="provider.html?id=${encodeURIComponent(p.id)}"><img src="${esc(image)}" alt="${esc(p.business_name)}" loading="lazy"></a><div class="card-body"><div class="card-topline"><p>${esc(p.category || 'Independent business')}</p></div><h3><a href="provider.html?id=${encodeURIComponent(p.id)}">${esc(p.business_name)}</a></h3><p class="card-desc">${esc(p.description || '')}</p><div class="card-footer"><span>★ ${rating} <small>(${Number(p.review_count || 0)})</small></span><span>${esc(p.location || '')}</span></div></div></article>`;
 }
-
-async function initDirectory() {
-  const grid = $('#listingGrid');
-  if (!grid) return;
-  const empty = $('#emptyState'), note = $('#resultsNote'), input = $('#directorySearch'), filter = $('#categoryFilter');
-  let all = [];
+async function getUser() { const { data } = await client().auth.getUser(); state.user = data.user || null; return state.user; }
+async function requireUser() { const user = await getUser(); if (!user) { location.href = 'auth.html?next=dashboard.html'; return null; } return user; }
+// Authorization must be resolved by Postgres, never by a browser-readable role
+// alone. The SECURITY DEFINER RPC is restricted to authenticated users and reads
+// only the caller's profile.
+async function isAdmin() {
+  const { data, error } = await client().rpc('is_admin');
+  if (error) throw new Error(`Could not verify admin access: ${error.message}`);
+  return data === true;
+}
+async function ensureProfile() {
+  const { error } = await client().rpc('ensure_my_profile');
+  if (error) throw new Error(`Could not prepare your provider profile: ${error.message}`);
+}
+async function loadDirectory() {
+  const grid = $('#listingGrid'); if (!grid) return;
+  const note = $('#resultsNote'); const empty = $('#emptyState');
+  loading($('#directoryLoading'), true);
   try {
-    all = await loadApproved();
-  } catch (e) {
-    note.textContent = 'The directory could not be loaded right now.';
-    return;
-  }
-  let q = '', cat = 'All';
-
-  function render() {
-    const rows = all.filter(p =>
-      (cat === 'All' || p.category === cat) &&
-      (`${p.name || ''} ${p.category || ''} ${p.description || ''} ${p.location || ''}`).toLowerCase().includes(q.toLowerCase())
-    );
-    grid.innerHTML = rows.map(providerCard).join('');
-    empty.hidden = rows.length > 0;
-    note.textContent = rows.length
-      ? `${rows.length} ${rows.length === 1 ? 'business' : 'businesses'} to discover.`
-      : (all.length ? 'No results for that search.' : 'The Index is just getting started — no approved providers yet.');
-  }
-
-  function search(v) {
-    q = v;
-    input.value = v;
-    render();
-    $('#directory')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-
-  $('#searchForm').onsubmit = e => { e.preventDefault(); search(input.value.trim()); };
-  document.querySelectorAll('[data-search]').forEach(b => b.onclick = () => search(b.dataset.search));
-  document.querySelectorAll('[data-category]').forEach(a => a.onclick = () => { cat = a.dataset.category; filter.value = cat; render(); });
-  filter.onchange = () => { cat = filter.value; render(); };
-  $('#clearSearch')?.addEventListener('click', () => {
-    q = ''; cat = 'All'; input.value = ''; filter.value = 'All'; render();
-  });
-  render();
-}
-
-/* ---------- Auth ---------- */
-
-async function initAuth() {
-  if (!$('#authForm')) return;
-  if (!supabaseClient) return;
-
-  let mode = 'signin';
-  const title = $('#authTitle'), sub = $('#authSubtitle'), submit = $('#authSubmit'),
-    switcher = $('#switchAuth'), password = $('#authPassword'), message = $('#authMessage');
-
-  function setMode(m) {
-    mode = m;
-    $('#authMode').value = m;
-    title.textContent = m === 'signup' ? 'Create your account.' : 'Welcome back.';
-    sub.textContent = m === 'signup'
-      ? 'Create an account to submit and manage your listings.'
-      : 'Sign in to manage your listings or submit a business.';
-    submit.textContent = m === 'signup' ? 'Create account' : 'Sign in';
-    switcher.textContent = m === 'signup' ? 'Already have an account? Sign in' : 'Create an account';
-    password.autocomplete = m === 'signup' ? 'new-password' : 'current-password';
-    $('#forgotPassword').hidden = m === 'signup';
-  }
-  setMode('signin');
-
-  switcher.onclick = () => setMode(mode === 'signin' ? 'signup' : 'signin');
-
-  $('#forgotPassword').onclick = async () => {
-    const email = $('#authEmail').value.trim();
-    if (!email) { message.textContent = 'Enter your email first.'; return; }
-    const redirectTo = `${location.origin}${location.pathname.replace(/auth\.html$/, 'reset-password.html')}`;
-    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo });
-    message.textContent = error ? error.message : 'Password reset email sent. Check your inbox.';
-  };
-
-  $('#authForm').onsubmit = async e => {
-    e.preventDefault();
-    const email = $('#authEmail').value.trim(), pw = password.value;
-    busy(submit, true, mode === 'signup' ? 'Creating…' : 'Signing in…');
-    const r = mode === 'signup'
-      ? await supabaseClient.auth.signUp({ email, password: pw })
-      : await supabaseClient.auth.signInWithPassword({ email, password: pw });
-    busy(submit, false);
-    if (r.error) { message.textContent = r.error.message; return; }
-    if (mode === 'signup' && !r.data.session) {
-      message.textContent = 'Check your inbox to confirm your account, then sign in.';
-      return;
-    }
-    currentUser = r.data.user;
-    await ensureProfile();
-    location.href = nextUrl();
-  };
-}
-
-async function initReset() {
-  const form = $('#resetForm');
-  if (!form || !supabaseClient) return;
-  let recovery = false;
-  supabaseClient.auth.onAuthStateChange((event, session) => {
-    if (event === 'PASSWORD_RECOVERY') recovery = true;
-  });
-  const { data } = await supabaseClient.auth.getSession();
-  if (data.session) recovery = true;
-
-  form.onsubmit = async e => {
-    e.preventDefault();
-    const a = $('#newPassword').value, b = $('#confirmPassword').value,
-      msg = $('#resetMessage'), btn = $('#resetSubmit');
-    if (a !== b) { msg.textContent = 'Passwords do not match.'; return; }
-    if (!recovery) { msg.textContent = 'This recovery link is invalid or has expired. Request a new one.'; return; }
-    busy(btn, true, 'Updating…');
-    const { error } = await supabaseClient.auth.updateUser({ password: a });
-    busy(btn, false);
-    if (error) { msg.textContent = error.message; return; }
-    msg.textContent = 'Password updated. You can sign in now.';
-    await supabaseClient.auth.signOut();
-  };
-}
-
-/* ---------- Photo upload ---------- */
-
-async function uploadPhotos(providerId, files) {
-  if (!files.length) return;
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    if (f.size > 6 * 1024 * 1024) throw new Error('Each photo must be under 6 MB.');
-    const path = `${currentUser.id}/${providerId}/${Date.now()}-${i}-${f.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const { error } = await supabaseClient.storage.from('provider-photos').upload(path, f, { upsert: false });
+    const { data, error } = await client().from('providers').select('*').eq('status', 'approved').order('created_at', { ascending: false });
     if (error) throw error;
-    const { data } = supabaseClient.storage.from('provider-photos').getPublicUrl(path);
-    const { error: rowError } = await supabaseClient.from('provider_photos').insert({
-      provider_id: providerId,
-      image_url: data.publicUrl,
-      sort_order: i
-    });
-    if (rowError) throw rowError;
-  }
-}
-
-/* ---------- Dashboard ---------- */
-
-async function initDashboard() {
-  const root = $('#dashboardRoot');
-  if (!root) return;
-  if (!currentUser) { location.href = 'auth.html?next=dashboard.html'; return; }
-  await ensureProfile();
-
-  $('#signOutButton').onclick = async () => {
-    await supabaseClient.auth.signOut();
-    location.href = 'index.html';
-  };
-
-  const { data: profile } = await supabaseClient.from('profiles').select('role').eq('id', currentUser.id).maybeSingle();
-  if (profile?.role === 'admin') { $('#adminNav').hidden = false; }
-
-  const { data: rows, error } = await supabaseClient
-    .from('providers')
-    .select('*')
-    .eq('owner_id', currentUser.id)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    root.innerHTML = `<div class="dashboard-empty"><h2>Could not load listings.</h2><p>${esc(error.message)}</p></div>`;
-  } else if (!rows?.length) {
-    root.innerHTML = '<div class="dashboard-empty"><h2>No listings yet.</h2><p>Your first submission will appear here while it is being reviewed.</p></div>';
-  } else {
-    root.innerHTML = `<div class="provider-list">${rows.map(p => `<article class="dashboard-card"><div><span class="status-pill status-${esc(p.status || 'pending')}">${esc(p.status || 'pending')}</span><h2>${esc(p.name)}</h2><p>${esc(p.category || 'Other')} · ${esc(p.location || 'Online')}</p><p class="muted-note">${esc(p.description || '')}</p></div><div class="dashboard-actions"><a class="arrow-link" href="provider.html?id=${encodeURIComponent(p.id)}">View →</a></div></article>`).join('')}</div>`;
-  }
-}
-
-/* ---------- Provider profile page ---------- */
-
-async function initProvider() {
-  const root = $('#providerRoot');
-  if (!root) return;
-  const id = new URLSearchParams(location.search).get('id');
-  if (!id) {
-    root.innerHTML = '<div class="dashboard-empty"><h2>Provider not found.</h2><a class="button button-dark" href="index.html">Back to Index</a></div>';
-    return;
-  }
-
-  const { data: p, error } = await supabaseClient
-    .from('providers')
-    .select('*, provider_photos(image_url,sort_order)')
-    .eq('id', id)
-    .eq('status', 'approved')
-    .maybeSingle();
-
-  if (error || !p) {
-    root.innerHTML = '<div class="dashboard-empty"><h2>This provider is not available.</h2><p>It may still be under review.</p><a class="button button-dark" href="index.html">Back to Index</a></div>';
-    return;
-  }
-
-  document.title = `${p.name} — The Index`;
-  const website = p.website ? normalizeUrl(p.website) : '';
-  const photos = (p.provider_photos || []).slice().sort((a, b) => a.sort_order - b.sort_order);
-  const heroPhoto = photos[0]?.image_url;
-
-  root.innerHTML = `
-<section class="profile-hero">
-  <div class="profile-heading">
-    <p class="eyebrow">${esc(p.category || 'Other')} <span class="dot">•</span> ${esc(p.location || 'Online')}</p>
-    <div class="title-row"><h1>${esc(p.name)}</h1><span class="verified">✓ Verified</span></div>
-    <p class="profile-lede">${esc(p.description || '')}</p>
-  </div>
-  <div class="hero-image">
-    ${heroPhoto
-      ? `<img src="${esc(heroPhoto)}" alt="${esc(p.name)}">`
-      : `<div class="image-placeholder large"><span>✦</span></div>`}
-  </div>
-</section>
-<section class="profile-layout">
-  <div class="profile-content">
-    <section><h2>About</h2><p>${esc(p.description || '')}</p></section>
-    ${photos.length > 1
-      ? `<section class="profile-gallery-section"><h2>Gallery</h2><div class="profile-gallery">${photos.slice(1).map(ph => `<img src="${esc(ph.image_url)}" alt="" loading="lazy">`).join('')}</div></section>`
-      : ''}
-  </div>
-  <aside class="contact-card">
-    <div class="availability"><i></i> Verified provider</div>
-    <h3>Interested in this provider?</h3>
-    <p>Use the provider's details below to get in touch.</p>
-    ${website ? `<a class="button button-dark" href="${esc(website)}" target="_blank" rel="noopener">Visit website ↗</a>` : ''}
-    <dl>
-      <div><dt>Based in</dt><dd>${esc(p.location || '—')}</dd></div>
-      <div><dt>Email</dt><dd>${p.contact_email ? `<a href="mailto:${esc(p.contact_email)}">${esc(p.contact_email)}</a>` : '—'}</dd></div>
-      <div><dt>Phone</dt><dd>${p.contact_phone ? `<a href="tel:${esc(p.contact_phone)}">${esc(p.contact_phone)}</a>` : '—'}</dd></div>
-    </dl>
-  </aside>
-</section>`;
-}
-
-/* ---------- Provider submission form ---------- */
-
-async function initProviderForm() {
-  const form = $('#providerForm');
-  if (!form) return;
-  if (!currentUser) { location.href = 'auth.html?next=dashboard.html'; return; }
-
-  form.onsubmit = async e => {
-    e.preventDefault();
-    const btn = form.querySelector('button[type=submit]');
-    const files = Array.from($('#pPhotos').files || []);
-    if (files.length > 4) { toast('Please choose no more than 4 photos.'); return; }
-
-    const payload = {
-      owner_id: currentUser.id,
-      name: $('#pName').value.trim(),
-      category: $('#pCategory').value,
-      description: $('#pDescription').value.trim(),
-      website: normalizeUrl($('#pWebsite').value.trim()),
-      location: $('#pLocation').value.trim(),
-      contact_email: $('#pEmail').value.trim() || null,
-      contact_phone: $('#pPhone').value.trim() || null,
-      status: 'pending'
+    const providers = data || [];
+    const render = () => {
+      const term = $('#directorySearch')?.value.trim().toLowerCase() || '';
+      const category = $('#categoryFilter')?.value || 'All';
+      const filtered = providers.filter(p => (category === 'All' || p.category === category) && `${p.business_name} ${p.category} ${p.description} ${p.location}`.toLowerCase().includes(term));
+      grid.innerHTML = filtered.map(providerCard).join(''); empty.hidden = filtered.length !== 0;
+      note.textContent = filtered.length ? `${filtered.length} approved ${filtered.length === 1 ? 'business' : 'businesses'} to discover.` : 'No approved businesses match that search.';
     };
-    if (!payload.name || !payload.description || !payload.website) {
-      toast('Name, description and website are required.');
-      return;
+    $('#searchForm')?.addEventListener('submit', e => { e.preventDefault(); render(); });
+    $('#categoryFilter')?.addEventListener('change', render); $('#clearSearch')?.addEventListener('click', () => { $('#directorySearch').value = ''; $('#categoryFilter').value = 'All'; render(); }); render();
+  } catch (error) { message($('#directoryError'), error.message, 'error'); } finally { loading($('#directoryLoading'), false); }
+}
+async function loadProvider() {
+  const root = $('#providerPage'); if (!root) return;
+  const id = new URLSearchParams(location.search).get('id');
+  if (!id) { message($('#providerError'), 'This provider link is missing an ID.', 'error'); return; }
+  try {
+    const { data: p, error } = await client().from('providers').select('*').eq('id', id).eq('status', 'approved').single();
+    if (error) throw new Error('This listing is unavailable.');
+    $('#providerName').textContent = p.business_name; $('#providerCategory').textContent = p.category || 'Independent business'; $('#providerLocation').textContent = p.location || '';
+    $('#providerDescription').textContent = p.description || ''; $('#providerImage').src = p.image_url || 'assets/studio.jpg'; $('#providerWebsite').href = p.website || '#'; $('#providerWebsite').hidden = !p.website;
+    $('#providerRating').textContent = `★ ${Number(p.average_rating || 0).toFixed(1)} (${Number(p.review_count || 0)} reviews)`;
+    await loadReviews(id); bindReview(id);
+  } catch (error) { message($('#providerError'), error.message, 'error'); } finally { loading($('#providerLoading'), false); }
+}
+async function loadReviews(providerId) {
+  const list = $('#reviewList'); if (!list) return;
+  const { data, error } = await client().from('reviews').select('rating,body,created_at,profiles(full_name)').eq('provider_id', providerId).order('created_at', { ascending: false });
+  if (error) { message($('#reviewError'), 'Reviews are temporarily unavailable.', 'error'); return; }
+  list.innerHTML = (data || []).map(r => `<blockquote><strong>${'★'.repeat(r.rating)}</strong><p>${esc(r.body)}</p><footer>${esc(r.profiles?.full_name || 'Index member')}</footer></blockquote>`).join('') || '<p>No reviews yet. Be the first to share your experience.</p>';
+}
+function bindReview(providerId) {
+  $('#reviewForm')?.addEventListener('submit', async e => { e.preventDefault(); const user = await requireUser(); if (!user) return; const button = $('button[type="submit"]', e.currentTarget); button.disabled = true; message($('#reviewMessage'), 'Saving your review…');
+    const form = new FormData(e.currentTarget); const { error } = await client().from('reviews').insert({ provider_id: providerId, user_id: user.id, rating: Number(form.get('rating')), body: form.get('body').trim() });
+    button.disabled = false; if (error) return message($('#reviewMessage'), error.message, 'error'); e.currentTarget.reset(); message($('#reviewMessage'), 'Thank you — your review has been published.', 'success'); loadReviews(providerId);
+  });
+}
+async function loadDashboard() {
+  const user = await requireUser(); if (!user) return; loading($('#dashboardLoading'), true);
+  try {
+    const { data, error } = await client().from('providers').select('*').eq('owner_id', user.id).order('created_at', { ascending: false }); if (error) throw error;
+    const list = $('#ownerListings'); list.innerHTML = (data || []).map(p => `<article class="manage-card"><div><p class="status ${esc(p.status)}">${esc(p.status)}</p><h3>${esc(p.business_name)}</h3><p>${esc(p.category || '')} · ${esc(p.location || '')}</p></div><div><button data-edit="${p.id}">Edit</button><button data-delete="${p.id}" class="danger">Delete</button></div></article>`).join('') || '<p>You have no listings yet. Create one below.</p>';
+    list.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => deleteListing(b.dataset.delete)); list.querySelectorAll('[data-edit]').forEach(b => editListing((data || []).find(p => p.id === b.dataset.edit)));
+    $('#listingForm').onsubmit = e => saveListing(e, user); $('#photoInput').onchange = () => uploadPhoto(user); 
+  } catch (error) { message($('#dashboardMessage'), error.message, 'error'); } finally { loading($('#dashboardLoading'), false); }
+}
+function editListing(p) { const f = $('#listingForm'); ['id','category','location','website','description'].forEach(k => f.elements[k].value = p[k] || ''); f.elements.business_name.value = p.business_name || ''; $('#formTitle').textContent = `Edit ${p.business_name}`; location.hash = 'listingForm'; }
+async function saveListing(e, user) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const button = $('button[type="submit"]', form);
+  const notice = $('#dashboardMessage');
+  const id = form.elements.id.value;
+  const payload = {
+    business_name: form.elements.business_name.value.trim(),
+    category: form.elements.category.value,
+    description: form.elements.description.value.trim(),
+    location: form.elements.location.value.trim(),
+    website: form.elements.website.value.trim() || null,
+    owner_id: user.id
+  };
+  button.disabled = true;
+  message(notice, id ? 'Saving your changes…' : 'Submitting your listing…');
+  try {
+    if (!id) await ensureProfile();
+    let result;
+    if (id) {
+      result = await client().from('providers').update(payload).eq('id', id).eq('owner_id', user.id).select('id,status,business_name').single();
+    } else {
+      result = await client().from('providers').insert({ ...payload, status: 'pending' }).select('id,status,business_name').single();
     }
-
-    busy(btn, true, 'Submitting…');
-    const { data, error } = await supabaseClient.from('providers').insert(payload).select().single();
-    if (error) { busy(btn, false); toast(error.message); return; }
-
-    try {
-      await uploadPhotos(data.id, files);
-    } catch (err) {
-      console.warn(err);
-      toast('Listing submitted, but one or more photos could not be uploaded.');
-    }
-
-    busy(btn, false);
+    if (result.error) throw result.error;
+    if (!id && result.data?.status !== 'pending') throw new Error('The listing was saved, but it was not marked pending. Please contact an administrator.');
     form.reset();
-    toast('Submitted for review.');
-    await initDashboard();
-    location.hash = '';
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-}
-
-/* ---------- Admin ---------- */
-
-function adminCard(p) {
-  return `<article class="admin-card"><div class="admin-card-main"><div><span class="status-pill status-${esc(p.status || 'pending')}">${esc(p.status || 'pending')}</span><h2>${esc(p.name || 'Unnamed provider')}</h2><p>${esc(p.category || 'Other')} · ${esc(p.location || 'Online')}</p><p class="muted-note">${esc(p.description || '')}</p><p class="admin-meta">${esc(p.contact_email || 'No email')}${p.contact_phone ? ' · ' + esc(p.contact_phone) : ''}</p></div><div class="admin-actions"><a class="arrow-link" href="provider.html?id=${encodeURIComponent(p.id)}">View →</a>${p.status !== 'approved' ? `<button class="button button-dark" data-action="approve" data-id="${esc(p.id)}">Approve</button>` : ''}${p.status !== 'rejected' ? `<button class="button button-light" data-action="reject" data-id="${esc(p.id)}">Reject</button>` : ''}${p.status !== 'pending' ? `<button class="text-button" data-action="pending" data-id="${esc(p.id)}">Set pending</button>` : ''}<button class="text-button danger" data-action="delete" data-id="${esc(p.id)}">Delete</button></div></div></article>`;
-}
-
-async function initAdmin() {
-  const root = $('#adminRoot');
-  if (!root) return;
-  if (!currentUser) { location.href = 'auth.html?next=admin.html'; return; }
-
-  const { data: isAdmin, error: roleError } = await supabaseClient.rpc('is_admin');
-  if (roleError || !isAdmin) {
-    root.innerHTML = '<div class="dashboard-empty"><h2>Access denied.</h2><p>Your account does not have administrator access.</p><a class="button button-dark" href="index.html">Back to Index</a></div>';
-    return;
+    $('#formTitle').textContent = 'Create a listing';
+    message(notice, id ? 'Listing saved. Its moderation status is unchanged.' : 'Listing submitted for approval and marked Pending.', 'success');
+    await loadDashboard();
+  } catch (error) {
+    message(notice, `Could not save the listing: ${error.message || 'Please try again.'}`, 'error');
+  } finally {
+    button.disabled = false;
   }
-
-  $('#adminSignOut').onclick = async () => {
-    await supabaseClient.auth.signOut();
-    location.href = 'index.html';
-  };
-
-  async function render() {
-    const { data, error } = await supabaseClient.from('providers').select('*').order('created_at', { ascending: false });
-    if (error) {
-      root.innerHTML = `<div class="dashboard-empty"><h2>Could not load listings.</h2><p>${esc(error.message)}</p></div>`;
-      return;
-    }
-    const rows = data || [];
-    const pending = rows.filter(x => x.status === 'pending').length;
-    const approved = rows.filter(x => x.status === 'approved').length;
-    const rejected = rows.filter(x => x.status === 'rejected').length;
-
-    root.innerHTML = `<div class="admin-stats"><div><b>${rows.length}</b><span>Total</span></div><div><b>${pending}</b><span>Pending</span></div><div><b>${approved}</b><span>Approved</span></div><div><b>${rejected}</b><span>Rejected</span></div></div><div class="admin-toolbar"><button class="filter-chip active" data-filter="all">All</button><button class="filter-chip" data-filter="pending">Pending</button><button class="filter-chip" data-filter="approved">Approved</button><button class="filter-chip" data-filter="rejected">Rejected</button></div><div class="admin-list" id="adminList">${rows.map(adminCard).join('')}</div>`;
-
-    function filter(s) {
-      document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === s));
-      document.querySelectorAll('.admin-card').forEach(c => {
-        const pill = c.querySelector('.status-pill');
-        c.hidden = s !== 'all' && pill?.textContent !== s;
-      });
-    }
-    document.querySelectorAll('[data-filter]').forEach(b => b.onclick = () => filter(b.dataset.filter));
-
-    root.querySelectorAll('[data-action]').forEach(btn => btn.onclick = async () => {
-      const id = btn.dataset.id, action = btn.dataset.action;
-      if (action === 'delete' && !confirm('Delete this listing permanently?')) return;
-      busy(btn, true, action === 'approve' ? 'Approving…' : action === 'reject' ? 'Rejecting…' : action === 'delete' ? 'Deleting…' : 'Saving…');
-      let result;
-      if (action === 'delete') {
-        result = await supabaseClient.from('providers').delete().eq('id', id);
-      } else {
-        result = await supabaseClient.from('providers').update({
-          status: action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'pending'
-        }).eq('id', id);
-      }
-      busy(btn, false);
-      if (result.error) { toast(result.error.message); return; }
-      toast(action === 'delete'
-        ? 'Listing deleted'
-        : `Listing ${action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'set to pending'}.`);
-      await render();
-    });
-  }
-  render();
 }
-
-/* ---------- Boot ---------- */
-
-async function init() {
-  await initSupabase();
-  await initAuth();
-  await initReset();
-  await initDirectory();
-  await initDashboard();
-  await initProviderForm();
-  await initProvider();
-  await initAdmin();
+async function deleteListing(id) { if (!confirm('Delete this listing? This cannot be undone.')) return; const { error } = await client().from('providers').delete().eq('id', id); if (error) return message($('#dashboardMessage'), error.message, 'error'); message($('#dashboardMessage'), 'Listing deleted.', 'success'); loadDashboard(); }
+async function uploadPhoto(user) { const input = $('#photoInput'); const file = input.files[0]; const providerId = $('#listingForm').elements.id.value; if (!file || !providerId) return message($('#dashboardMessage'), 'Save the listing first, then upload a photo.', 'error'); if (!file.type.startsWith('image/') || file.size > 5 * 1024 * 1024) return message($('#dashboardMessage'), 'Choose an image under 5 MB.', 'error'); const path = `${user.id}/${providerId}/${crypto.randomUUID()}-${file.name.replace(/[^a-z0-9._-]/gi, '-')}`; message($('#dashboardMessage'), 'Uploading photo…'); const { error } = await client().storage.from('provider-photos').upload(path, file, { upsert: false }); if (error) return message($('#dashboardMessage'), error.message, 'error'); const { data } = client().storage.from('provider-photos').getPublicUrl(path); const result = await client().from('providers').update({ image_url: data.publicUrl }).eq('id', providerId).eq('owner_id', user.id); message($('#dashboardMessage'), result.error ? result.error.message : 'Photo uploaded and set as the listing image.', result.error ? 'error' : 'success'); }
+async function loadAdmin() {
+  const user = await requireUser(); if (!user) return; loading($('#adminLoading'), true);
+  try { if (!(await isAdmin())) { $('#adminDenied').hidden = false; return; }
+    $('#adminContent').hidden = false; const { data, error } = await client().from('providers').select('*').order('created_at', { ascending: false }); if (error) throw error;
+    const render = () => { const filter = $('#adminFilter').value; const rows = data.filter(p => filter === 'all' || p.status === filter); $('#adminListings').innerHTML = rows.map(p => `<article class="manage-card"><div><p class="status ${esc(p.status)}">${esc(p.status)}</p><h3>${esc(p.business_name)}</h3><p>${esc(p.category || '')} · ${esc(p.location || '')}</p></div><div class="admin-actions">${p.status !== 'approved' ? `<button data-status="approved" data-id="${p.id}">Approve</button>` : ''}${p.status !== 'rejected' ? `<button class="danger" data-status="rejected" data-id="${p.id}">Reject</button>` : ''}${p.status !== 'pending' ? `<button data-status="pending" data-id="${p.id}">Restore pending</button>` : ''}</div></article>`).join('') || '<p>No listings in this view.</p>'; $('#adminListings').querySelectorAll('[data-status]').forEach(b => b.onclick = () => moderate(b.dataset.id, b.dataset.status)); };
+    $('#adminFilter').onchange = render; render();
+  } catch (error) { message($('#adminMessage'), error.message, 'error'); } finally { loading($('#adminLoading'), false); }
 }
-
-document.addEventListener('DOMContentLoaded', init);
+async function moderate(id, status) {
+  const { error } = await client().rpc('moderate_provider_listing', {
+    target_provider_id: id,
+    next_status: status
+  });
+  if (error) return message($('#adminMessage'), error.message, 'error');
+  await loadAdmin();
+  message($('#adminMessage'), `Listing ${status}.`, 'success');
+}
+document.addEventListener('DOMContentLoaded', () => { loadDirectory(); loadProvider(); if ($('#ownerListings')) loadDashboard(); if ($('#adminListings')) loadAdmin(); });
