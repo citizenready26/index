@@ -1,14 +1,22 @@
-# The Index — frontend prototype
+# The Index — Supabase-connected prototype
 
-Open `index.html` in any modern browser. No installation, account, server, or code is required.
+This build keeps the polished directory UI and adds a real Supabase connection.
 
-Included experience:
+## Connected now
+- Supabase client using the public publishable key
+- Email/password sign-in and account creation
+- Profile upsert for signed-in users
+- Real provider records are loaded from the `providers` table when RLS allows it
+- Provider links use `provider.html?id=...`
+- Favourites can be saved for authenticated real providers
+- Existing demo listings remain available as fallback/sample content
 
-- Responsive public directory homepage with search and category filtering
-- Provider profile with gallery, services, review samples, related providers, save action, and contact flow
-- Local demo dialogs and notifications for listing, messaging, and saving
-- Supplied imagery is bundled under `assets/`
+## Important
+The frontend uses only the Supabase **publishable** key. Never put the `secret` or `service_role` key in these files.
 
-## Prototype boundary
+GitHub Pages is still public. Supabase authentication does not password-protect the GitHub Pages URL itself. For private development, put an access layer such as Cloudflare Access in front of the site.
 
-This is intentionally a frontend-only prototype. Searches filter the sample listings in the browser. “List your business”, messaging, and favourites are visual demo actions; they do not create accounts, send messages, or persist to a real database. A production build needs authentication, provider onboarding, content moderation, a database/API, secure image storage, and transactional messaging.
+## Existing backend tables expected
+`profiles`, `providers`, `provider_photos`, `reviews`, `favourites`.
+
+The current prototype intentionally does not upload photos yet; secure Storage bucket setup is the next backend step.
