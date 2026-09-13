@@ -30,6 +30,10 @@ async function isAdmin(user) {
   if (error) throw error;
   return data?.role === 'admin';
 }
+async function ensureProfile() {
+  const { error } = await client().rpc('ensure_my_profile');
+  if (error) throw new Error(`Could not prepare your provider profile: ${error.message}`);
+}
 async function loadDirectory() {
   const grid = $('#listingGrid'); if (!grid) return;
   const note = $('#resultsNote'); const empty = $('#emptyState');
@@ -101,6 +105,7 @@ async function saveListing(e, user) {
   button.disabled = true;
   message(notice, id ? 'Saving your changes…' : 'Submitting your listing…');
   try {
+    if (!id) await ensureProfile();
     let result;
     if (id) {
       result = await client().from('providers').update(payload).eq('id', id).eq('owner_id', user.id).select('id,status,business_name').single();
