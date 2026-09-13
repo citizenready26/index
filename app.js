@@ -83,9 +83,41 @@ async function loadDashboard() {
     $('#listingForm').onsubmit = e => saveListing(e, user); $('#photoInput').onchange = () => uploadPhoto(user); 
   } catch (error) { message($('#dashboardMessage'), error.message, 'error'); } finally { loading($('#dashboardLoading'), false); }
 }
-function editListing(p) { const f = $('#listingForm'); ['id','category','location','website','description'].forEach(k => f.elements[k].value = p[k] || ''); f.elements.name.value = p.business_name || ''; $('#formTitle').textContent = `Edit ${p.business_name}`; location.hash = 'listingForm'; }
-async function saveListing(e, user) { e.preventDefault(); const f = e.currentTarget; const button = $('button[type="submit"]', f); button.disabled = true; const payload = Object.fromEntries(new FormData(f)); const id = payload.id; delete payload.id; payload.owner_id = user.id; if (!id) payload.status = 'pending';
-  payload.business_name = payload.name; delete payload.name; const query = id ? client().from('providers').update(payload).eq('id', id).eq('owner_id', user.id) : client().from('providers').insert(payload); const { error } = await query; button.disabled = false; if (error) return message($('#dashboardMessage'), error.message, 'error'); f.reset(); $('#formTitle').textContent = 'Create a listing'; message($('#dashboardMessage'), id ? 'Listing saved. Its moderation status is unchanged.' : 'Listing submitted for approval.', 'success'); loadDashboard();
+function editListing(p) { const f = $('#listingForm'); ['id','category','location','website','description'].forEach(k => f.elements[k].value = p[k] || ''); f.elements.business_name.value = p.business_name || ''; $('#formTitle').textContent = `Edit ${p.business_name}`; location.hash = 'listingForm'; }
+async function saveListing(e, user) {
+  e.preventDefault();
+  const form = e.currentTarget;
+  const button = $('button[type="submit"]', form);
+  const notice = $('#dashboardMessage');
+  const id = form.elements.id.value;
+  const payload = {
+    business_name: form.elements.business_name.value.trim(),
+    category: form.elements.category.value,
+    description: form.elements.description.value.trim(),
+    location: form.elements.location.value.trim(),
+    website: form.elements.website.value.trim() || null,
+    owner_id: user.id
+  };
+  button.disabled = true;
+  message(notice, id ? 'Saving your changes…' : 'Submitting your listing…');
+  try {
+    let result;
+    if (id) {
+      result = await client().from('providers').update(payload).eq('id', id).eq('owner_id', user.id).select('id,status,business_name').single();
+    } else {
+      result = await client().from('providers').insert({ ...payload, status: 'pending' }).select('id,status,business_name').single();
+    }
+    if (result.error) throw result.error;
+    if (!id && result.data?.status !== 'pending') throw new Error('The listing was saved, but it was not marked pending. Please contact an administrator.');
+    form.reset();
+    $('#formTitle').textContent = 'Create a listing';
+    message(notice, id ? 'Listing saved. Its moderation status is unchanged.' : 'Listing submitted for approval and marked Pending.', 'success');
+    await loadDashboard();
+  } catch (error) {
+    message(notice, `Could not save the listing: ${error.message || 'Please try again.'}`, 'error');
+  } finally {
+    button.disabled = false;
+  }
 }
 async function deleteListing(id) { if (!confirm('Delete this listing? This cannot be undone.')) return; const { error } = await client().from('providers').delete().eq('id', id); if (error) return message($('#dashboardMessage'), error.message, 'error'); message($('#dashboardMessage'), 'Listing deleted.', 'success'); loadDashboard(); }
 async function uploadPhoto(user) { const input = $('#photoInput'); const file = input.files[0]; const providerId = $('#listingForm').elements.id.value; if (!file || !providerId) return message($('#dashboardMessage'), 'Save the listing first, then upload a photo.', 'error'); if (!file.type.startsWith('image/') || file.size > 5 * 1024 * 1024) return message($('#dashboardMessage'), 'Choose an image under 5 MB.', 'error'); const path = `${user.id}/${providerId}/${crypto.randomUUID()}-${file.name.replace(/[^a-z0-9._-]/gi, '-')}`; message($('#dashboardMessage'), 'Uploading photo…'); const { error } = await client().storage.from('provider-photos').upload(path, file, { upsert: false }); if (error) return message($('#dashboardMessage'), error.message, 'error'); const { data } = client().storage.from('provider-photos').getPublicUrl(path); const result = await client().from('providers').update({ image_url: data.publicUrl }).eq('id', providerId).eq('owner_id', user.id); message($('#dashboardMessage'), result.error ? result.error.message : 'Photo uploaded and set as the listing image.', result.error ? 'error' : 'success'); }
