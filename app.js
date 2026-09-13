@@ -24,7 +24,7 @@ function providerCard(p) {
   return `<article class="listing-card"><a class="card-image" href="provider.html?id=${encodeURIComponent(p.id)}"><img src="${esc(image)}" alt="${esc(p.business_name)}" loading="lazy"></a><div class="card-body"><div class="card-topline"><p>${esc(p.category || 'Independent business')}</p></div><h3><a href="provider.html?id=${encodeURIComponent(p.id)}">${esc(p.business_name)}</a></h3><p class="card-desc">${esc(p.description || '')}</p><div class="card-footer"><span>★ ${rating} <small>(${Number(p.review_count || 0)})</small></span><span>${esc(p.location || '')}</span></div></div></article>`;
 }
 async function getUser() { const { data } = await client().auth.getUser(); state.user = data.user || null; return state.user; }
-async function requireUser() { const user = await getUser(); if (!user) { location.href = 'index.html?signin=1'; return null; } return user; }
+async function requireUser() { const user = await getUser(); if (!user) { location.href = 'auth.html?next=dashboard.html'; return null; } return user; }
 async function isAdmin(user) {
   const { data, error } = await client().from('profiles').select('role').eq('id', user.id).single();
   if (error) throw error;
