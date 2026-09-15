@@ -1,107 +1,18 @@
-// The Index — js/admin.js
-// Lets a signed-in admin (profiles.role = 'admin') review services by
-// status and approve or reject them. The real security boundary is the
-// RLS policy + trigger in supabase/schema.sql — this page just calls
-// .update(), and the database rejects it if the caller isn't an admin.
+const adminStyles = document.createElement('link');
+adminStyles.rel = 'stylesheet';
+adminStyles.href = 'css/admin.css';
+document.head.appendChild(adminStyles);
 
-(function () {
-  let currentStatus = 'pending';
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
-  }
-
-  function renderQueue(services) {
-    const container = document.getElementById('admin-queue');
-
-    if (!services.length) {
-      container.innerHTML = `<div class="empty-state">Nothing in ${escapeHtml(currentStatus)}.</div>`;
-      return;
-    }
-
-    container.innerHTML = '<ul class="listing-registry"></ul>';
-    const list = container.querySelector('.listing-registry');
-
-    services.forEach((service) => {
-      const li = document.createElement('li');
-      li.className = 'queue-row';
-
-      const actions = currentStatus === 'pending'
-        ? `<button class="button-link" data-approve="${service.id}">Approve</button>
-           <button class="button-link danger" data-reject="${service.id}">Reject</button>`
-        : currentStatus === 'approved'
-          ? `<button class="button-link danger" data-reject="${service.id}">Reject</button>`
-          : `<button class="button-link" data-approve="${service.id}">Approve</button>`;
-
-      li.innerHTML = `
-        <div class="queue-main">
-          <p class="listing-title">${escapeHtml(service.title)} <span class="status-pill status-${service.status}">${escapeHtml(service.status)}</span></p>
-          <p class="listing-desc">${escapeHtml(service.category)} — ${escapeHtml(service.description)}</p>
-          <p class="field-hint">Contact: ${escapeHtml(service.contact_info)}${service.website_url ? ' · ' + escapeHtml(service.website_url) : ''}</p>
-        </div>
-        <div class="queue-actions">${actions}</div>
-      `;
-      list.appendChild(li);
-    });
-
-    list.querySelectorAll('[data-approve]').forEach((btn) => {
-      btn.addEventListener('click', () => updateStatus(btn.dataset.approve, 'approved'));
-    });
-    list.querySelectorAll('[data-reject]').forEach((btn) => {
-      btn.addEventListener('click', () => updateStatus(btn.dataset.reject, 'rejected'));
-    });
-  }
-
-  async function loadQueue() {
-    document.getElementById('admin-queue').innerHTML = '<p class="loading">Loading…</p>';
-
-    const { data, error } = await window.supabaseClient
-      .from('services')
-      .select('id, title, category, description, website_url, contact_info, status, created_at')
-      .eq('status', currentStatus)
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      document.getElementById('admin-queue').innerHTML =
-        `<div class="empty-state">Couldn't load the queue. (${escapeHtml(error.message)})</div>`;
-      return;
-    }
-
-    renderQueue(data || []);
-  }
-
-  async function updateStatus(id, status) {
-    const { error } = await window.supabaseClient
-      .from('services')
-      .update({ status, reviewed_at: new Date().toISOString() })
-      .eq('id', id);
-
-    if (error) {
-      alert(`Couldn't update this listing: ${error.message}`);
-      return;
-    }
-    loadQueue();
-  }
-
-  document.addEventListener('DOMContentLoaded', async () => {
-    window.refreshNav();
-
-    const profile = await window.requireProfile({ requireAdmin: true });
-    if (!profile) return; // requireProfile already redirected
-
-    loadQueue();
-
-    document.querySelectorAll('.tab-strip button').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-strip button').forEach((b) => {
-          b.classList.toggle('active', b === btn);
-          b.setAttribute('aria-selected', String(b === btn));
-        });
-        currentStatus = btn.dataset.status;
-        loadQueue();
-      });
-    });
-  });
-})();
+document.addEventListener('DOMContentLoaded', async () => {
+  const notice = document.querySelector('#notice'), loading = document.querySelector('#loading'), dashboard = document.querySelector('#dashboard'), list = document.querySelector('#applications'); let applications = [], filter = 'pending';
+  const user = await requireUser(); if (!user) return;
+  try { if (!await isAdmin()) { location.replace('index.html'); return; } } catch (error) { loading.textContent = 'Could not verify administrator access.'; return setNotice(notice, error.message, 'error'); }
+  const render = () => { const count = status => applications.filter(item => item.status === status).length; const labels = {pending:'Pending',approved:'Live',rejected:'Archived'}; document.querySelector('#pending-count').textContent = count('pending'); document.querySelector('#approved-count').textContent = count('approved'); document.querySelector('#rejected-count').textContent = count('rejected'); const visible = filter === 'all' ? applications : applications.filter(item => item.status === filter); document.querySelector('#review-caption').textContent = `${visible.length} ${filter === 'all' ? 'total' : labels[filter].toLowerCase()} ${visible.length === 1 ? 'service' : 'services'}`;
+    if (!visible.length) { list.innerHTML = `<div class="empty">${filter === 'pending' ? 'Nothing is waiting here right now.' : 'There are no services in this section.'}</div>`; return; }
+    list.innerHTML = visible.map(item => { const image = item.image_path ? db.storage.from(INDEX_CONFIG.storageBucket).getPublicUrl(item.image_path).data.publicUrl : ''; const website = item.website ? `<a class="text-link" href="${escapeHtml(item.website)}" target="_blank" rel="noopener">Website ↗</a>` : ''; return `<article class="application"><div class="application-image">${image ? `<img src="${image}" alt="">` : `<span>${escapeHtml(item.category.charAt(0).toUpperCase())}</span>`}</div><div class="application-main"><div class="application-top"><div><div class="service-title"><h3>${escapeHtml(item.service_name)}</h3><span class="status ${item.status}">${labels[item.status]}</span></div><p class="meta">${escapeHtml(item.business_name)} · ${escapeHtml(item.category)} · ${escapeHtml(item.city)}</p></div><p class="meta submitted">${new Date(item.created_at).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}</p></div><p class="description">${escapeHtml(item.description)}</p><div class="provider-line"><strong>${escapeHtml(item.profiles?.full_name || 'Provider')}</strong><span>${escapeHtml(item.profiles?.phone || 'No phone')}</span>${website}</div><div class="actions">${item.status !== 'approved' ? `<button class="button small" data-action="approve" data-id="${item.id}">Publish</button>` : `<button class="button secondary small" data-action="unpublish" data-id="${item.id}">Archive</button>`}<button class="button secondary small" data-action="reject" data-id="${item.id}">Move to archive</button><button class="button danger small" data-action="delete" data-id="${item.id}">Delete</button></div></div></article>`; }).join(''); };
+  const load = async () => { loading.hidden = false; dashboard.hidden = true; const { data, error } = await db.from('service_applications').select('*, profiles(full_name,phone)').order('created_at',{ascending:false}); loading.hidden = true; if (error) return setNotice(notice,error.message,'error'); applications = data; dashboard.hidden = false; render(); };
+  document.querySelectorAll('.filter').forEach(button => button.onclick = () => { filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(tab => { const active = tab === button; tab.classList.toggle('active',active); tab.setAttribute('aria-selected',active); }); render(); });
+  document.querySelector('#refresh').onclick = load;
+  list.onclick = async event => { const button = event.target.closest('button[data-action]'); if (!button) return; const { action, id } = button.dataset; if (action === 'delete' && !confirm('Permanently delete this service?')) return; toggleBusy(button,true); let error; if (action === 'delete') ({ error } = await db.from('service_applications').delete().eq('id',id)); else { const values = action === 'approve' ? {status:'approved',approved_at:new Date().toISOString()} : {status:'rejected',approved_at:null}; ({ error } = await db.from('service_applications').update(values).eq('id',id)); } if (error) { toggleBusy(button,false); return setNotice(notice,error.message,'error'); } setNotice(notice, action === 'approve' ? 'Service is now live.' : action === 'unpublish' ? 'Service moved to archive.' : action === 'reject' ? 'Service moved to archive.' : 'Service deleted.', 'success'); load(); };
+  load();
+});
