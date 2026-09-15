@@ -11,5 +11,5 @@
 
 window.THE_INDEX_CONFIG = {
   supabaseUrl: 'https://abqlweiiwhjjpxdlokar.supabase.co',
-  supabaseAnonKey: 'PASTE-YOUR-ANON-PUBLIC-KEY-HERE',
+  supabaseAnonKey: 'sb_publishable_ogedpT56tgb0X2LUaHAAzg_P7Rg3mws',
 };
