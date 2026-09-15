@@ -1,29 +1,61 @@
 # The Index
 
-A static, GitHub Pages-ready service directory powered by Supabase. Providers create an account, submit one or more services for review, and an authorised administrator approves, rejects, or removes them. The public directory never contains sample listings: it reads only approved submissions from Supabase.
+A static, GitHub Pages-ready service directory powered by Supabase. Providers create an account, submit a service for review, and an admin approves or rejects it. The public directory only ever shows approved listings, and now supports search + category filtering.
 
-## Before publishing
+## Delete these first (old leftovers, do not upload these files)
 
-1. Create/open the Supabase project at `https://abqlweiiwhjjpxdlokar.supabase.co`.
-2. In **SQL Editor**, run the complete contents of [`supabase/schema.sql`](supabase/schema.sql).
-3. Create your administrator account through the website's normal sign-up page (or Supabase Authentication > Users), then run the small **Make yourself an admin** query at the end of `schema.sql`, replacing the email address.
-4. In **Authentication > URL Configuration**, set the Site URL to your GitHub Pages URL, for example `https://YOUR-NAME.github.io/the-index/`. Add both that URL and `http://localhost:5500` to Redirect URLs. This is required for password-reset links.
-5. Upload this folder to a GitHub repository and enable **Settings > Pages > Deploy from a branch**. No build step or server is needed.
+Your repo currently has an older, unrelated set of files at the root that predate this structure. **Delete them** before adding the files below, or they'll shadow/confuse the real pages:
 
-The project URL and publishable key are in [`js/config.js`](js/config.js). Publishable keys are designed for browser use; database access is protected by the SQL Row Level Security policies, not by keeping this key secret. Never add a Supabase `service_role` key to this project.
+- `config.js` (root)
+- `app.js`
+- `styles.css` (root)
+- `supabase-config.js`
+- `dashboard.html`
+- `provider.html`
+
+Everything this project needs lives in `index.html`, `auth.html`, `apply.html`, `admin.html`, `reset-password.html`, and the `css/`, `js/`, `supabase/` folders — nothing at the root besides those HTML files and this README.
+
+## Set up Supabase
+
+1. Open your Supabase project.
+2. **SQL Editor > New query** — paste the entire contents of `supabase/schema.sql` and run it. It's safe to re-run if you need to reset.
+3. Sign up on your site through `auth.html` using your own email.
+4. Back in **SQL Editor**, run the commented query at the bottom of `schema.sql`, replacing the email, to make yourself an admin:
+   ```sql
+   update public.profiles set role = 'admin'
+   where id = (select id from auth.users where email = 'you@example.com');
+   ```
+5. In **Project Settings > API**, copy your Project URL and **anon/publishable** key into `js/config.js`. Never put the `service_role` key anywhere in this repo.
+6. In **Authentication > URL Configuration**, set the Site URL to your GitHub Pages URL (e.g. `https://YOUR-NAME.github.io/index/`), and add both that URL and `http://localhost:5500` under Redirect URLs — this is required for the password-reset email link to work.
+
+## Deploy
+
+Push these files to your repo and enable **Settings > Pages > Deploy from a branch**. No build step needed.
 
 ## Files
 
-- `index.html` — approved public directory
-- `auth.html` — sign up, sign in, and forgot-password flow
-- `apply.html` — provider profile and service application form
-- `admin.html` — protected review dashboard
-- `reset-password.html` — password-update page reached from the email link
-- `supabase/schema.sql` — tables, triggers, storage bucket, and RLS policies
+- `index.html` — public directory with search + category filter
+- `auth.html` — sign up, sign in, forgot password
+- `apply.html` — provider dashboard: submit a service, see your submissions' status
+- `admin.html` — review queue: approve/reject pending services
+- `reset-password.html` — reached from the password-reset email
+- `js/config.js` — your Supabase URL + anon key (fill this in)
+- `js/supabase-client.js` — shared client + auth/nav helpers
+- `js/directory.js`, `js/auth.js`, `js/apply.js`, `js/admin.js` — per-page logic
+- `css/styles.css` — shared styling
+- `supabase/schema.sql` — tables, triggers, and RLS policies
 
 ## First test
 
-1. Sign up as a provider, complete the profile and submit a service.
-2. Sign out, sign into the account designated as admin, and open **Admin**.
-3. Approve the pending service. It will immediately appear on the home page for everyone.
+1. Sign up as a provider on `auth.html`, then submit a service on `apply.html`. It should show as **pending**.
+2. Sign in as your admin account, open `admin.html`, and approve it.
+3. It should immediately appear on `index.html` for everyone, including signed-out visitors.
+4. Try the search box and category dropdown on the homepage.
 
+## Why it was probably broken
+
+Two common causes if listings weren't showing up before:
+- `js/config.js` had a placeholder (or missing) anon key, so every Supabase call failed silently.
+- The RLS policies didn't match what the JS was querying (e.g. a policy checking a column name the app didn't use), so `select` returned nothing even for approved rows.
+
+This rebuild's `schema.sql` and `js/*.js` are written to match column-for-column, so if it still doesn't work after setup, check the browser console on the page in question — every fetch here surfaces the real Supabase error message instead of failing silently.
